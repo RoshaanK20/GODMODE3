@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS</title>
+<style>
+  :root { --bg:#070b0d; --panel:#0e1519; --line:#1b2a30; --fg:#d7ece6; --dim:#6f8a86; --acc:#2ee6a6; --warn:#ffb454; --bad:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; display:grid; grid-template-columns:1fr 320px; height:100vh; }
+  @media (max-width: 800px) { body { grid-template-columns:1fr; grid-template-rows:1fr auto; } aside { max-height:35vh; } }
+  main { display:flex; flex-direction:column; min-width:0; }
+  header { padding:10px 14px; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  header b { color:var(--acc); letter-spacing:.15em; }
+  header input { background:var(--panel); border:1px solid var(--line); color:var(--fg); padding:5px 8px; border-radius:6px; min-width:0; }
+  #log { flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:10px; }
+  .m { max-width:85%; padding:9px 12px; border-radius:12px; white-space:pre-wrap; word-wrap:break-word; }
+  .u { align-self:flex-end; background:#12333a; }
+  .j { align-self:flex-start; background:var(--panel); border:1px solid var(--line); }
+  .meta { font-size:12px; color:var(--dim); margin-top:4px; }
+  .warn { color:var(--warn); } .bad { color:var(--bad); }
+  form { display:flex; gap:8px; padding:10px; border-top:1px solid var(--line); }
+  form input { flex:1; background:var(--panel); border:1px solid var(--line); color:var(--fg); padding:10px; border-radius:8px; font-size:15px; }
+  button { background:var(--panel); border:1px solid var(--line); color:var(--fg); padding:8px 12px; border-radius:8px; cursor:pointer; }
+  button.on { border-color:var(--acc); color:var(--acc); }
+  button.go { background:var(--acc); color:#04120d; border-color:var(--acc); font-weight:600; }
+  aside { border-left:1px solid var(--line); overflow-y:auto; padding:12px; background:#0a1114; }
+  aside h3 { margin:14px 0 6px; font-size:12px; letter-spacing:.12em; color:var(--dim); text-transform:uppercase; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:8px; margin-bottom:8px; font-size:13px; }
+  .card code { color:var(--warn); word-break:break-all; }
+  .row { display:flex; gap:6px; margin-top:6px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <b>JARVIS</b>
+    <input id="base" placeholder="API URL" size="22" title="Where the GODMODE3 API runs (npm run api)">
+    <input id="key" placeholder="API key (if set)" type="password" size="14">
+    <button id="speak" title="Read replies aloud">🔊 Voice off</button>
+    <span id="status" class="meta"></span>
+  </header>
+  <div id="log"></div>
+  <form id="f">
+    <button type="button" id="mic" title="Hold a conversation by voice">🎤</button>
+    <input id="msg" autocomplete="off" placeholder="Talk to me…">
+    <button class="go">Send</button>
+  </form>
+</main>
+<aside>
+  <h3>Waiting for your approval</h3><div id="appr"><span class="meta">Nothing pending.</span></div>
+  <h3>What I remember</h3><div id="mem"><span class="meta">Nothing yet. Say “remember that …”.</span></div>
+</aside>
+<script>
+// All dynamic/server-provided text is inserted with textContent. innerHTML is used only for two static placeholder strings.
+const $ = id => document.getElementById(id);
+const store = { get(k, d){ try { return localStorage.getItem(k) ?? d } catch { return d } }, set(k, v){ try { localStorage.setItem(k, v) } catch {} } };
+$('base').value = store.get('jarvis.base', location.protocol.startsWith('http') && location.port !== '3000' ? location.origin : 'http://localhost:7860');
+$('key').value = store.get('jarvis.key', '');
+const session = 'web-' + Math.random().toString(36).slice(2, 10);
+let speakOn = false;
+
+function api(path, opts = {}) {
+  store.set('jarvis.base', $('base').value); store.set('jarvis.key', $('key').value);
+  const headers = { 'Content-Type': 'application/json' };
+  if ($('key').value) headers.Authorization = 'Bearer ' + $('key').value;
+  return fetch($('base').value.replace(/\/$/, '') + '/v1/jarvis' + path, { ...opts, headers }).then(async r => {
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    return j;
+  });
+}
+
+function add(cls, text, meta, metaCls) {
+  const d = document.createElement('div'); d.className = 'm ' + cls; d.textContent = text;
+  if (meta) { const m = document.createElement('div'); m.className = 'meta ' + (metaCls || ''); m.textContent = meta; d.appendChild(m); }
+  $('log').appendChild(d); $('log').scrollTop = 1e9; return d;
+}
+
+function say(text) {
+  if (!speakOn || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+}
+
+async function send(text) {
+  add('u', text);
+  const pending = add('j', '…');
+  try {
+    const r = await api('/chat', { method: 'POST', body: JSON.stringify({ message: text, session_id: session }) });
+    const bits = [];
+    if (r.steps.length) bits.push(r.steps.map(s => s.agent + ':' + s.status + (s.tools_used.length ? ' [' + s.tools_used.join(',') + ']' : '')).join('  '));
+    if (r.verification.verdict !== 'not_applicable') bits.push('check: ' + r.verification.verdict);
+    pending.textContent = r.reply;
+    if (bits.length || r.verification.issues.length) {
+      const m = document.createElement('div'); m.className = 'meta ' + (r.ok ? '' : 'warn');
+      m.textContent = bits.join(' · ') + (r.verification.issues.length ? ' — ' + r.verification.issues.join('; ') : '');
+      pending.appendChild(m);
+    }
+    say(r.reply);
+    refresh();
+  } catch (e) { pending.textContent = 'I could not reach my backend: ' + e.message; pending.classList.add('bad'); }
+}
+
+async function refresh() {
+  try {
+    const [a, m, s] = await Promise.all([api('/approvals'), api('/memory'), api('/status')]);
+    $('status').textContent = (s.model_provider_configured ? 'model ✓' : 'NO MODEL') + ' · autonomy ' + s.autonomy_level + ' · audit ' + (s.audit.ok ? '✓' : 'BROKEN');
+    const ap = $('appr'); ap.textContent = '';
+    const pend = a.approvals.filter(x => x.status === 'pending');
+    if (!pend.length) ap.innerHTML = '<span class="meta">Nothing pending.</span>';
+    for (const x of pend) {
+      const c = document.createElement('div'); c.className = 'card';
+      c.append(x.agent + ' wants to run ');
+      const code = document.createElement('code'); code.textContent = x.tool + ' ' + JSON.stringify(x.args).slice(0, 300); c.appendChild(code);
+      const row = document.createElement('div'); row.className = 'row';
+      for (const [label, d] of [['Approve', 'approve'], ['Deny', 'deny']]) {
+        const b = document.createElement('button'); b.textContent = label;
+        b.onclick = async () => { try { const r = await api('/approvals/' + x.id + '/' + d, { method: 'POST' }); add('j', d === 'approve' ? 'Done: ' + (r.approval.result || r.approval.status) : 'Denied. Nothing was run.'); } catch (e) { add('j', e.message); } refresh(); };
+        row.appendChild(b);
+      }
+      c.appendChild(row); ap.appendChild(c);
+    }
+    const me = $('mem'); me.textContent = '';
+    if (!m.memories.length) me.innerHTML = '<span class="meta">Nothing yet. Say “remember that …”.</span>';
+    for (const x of m.memories) {
+      const c = document.createElement('div'); c.className = 'card'; c.textContent = x.text;
+      const b = document.createElement('button'); b.textContent = 'forget'; b.style.marginLeft = '8px';
+      b.onclick = async () => { await api('/memory/' + x.id, { method: 'DELETE' }); refresh(); };
+      c.appendChild(b); me.appendChild(c);
+    }
+  } catch (e) { $('status').textContent = 'offline: ' + e.message; }
+}
+
+$('f').onsubmit = e => { e.preventDefault(); const t = $('msg').value.trim(); if (t) { $('msg').value = ''; send(t); } };
+$('speak').onclick = () => { speakOn = !speakOn; $('speak').textContent = speakOn ? '🔊 Voice on' : '🔊 Voice off'; $('speak').classList.toggle('on', speakOn); if (!speakOn) speechSynthesis?.cancel(); };
+
+// Voice input: browser Web Speech API (free; Chrome/Edge/Safari — Firefox lacks it).
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SR) { $('mic').disabled = true; $('mic').title = 'Speech recognition is not supported in this browser'; }
+else {
+  const rec = new SR(); rec.lang = navigator.language || 'en-IE'; rec.interimResults = false;
+  rec.onresult = ev => { const t = ev.results[0][0].transcript; $('msg').value = ''; send(t); };
+  rec.onend = () => $('mic').classList.remove('on');
+  rec.onerror = ev => add('j', 'Mic problem: ' + ev.error, null, 'warn');
+  $('mic').onclick = () => { speakOn = true; $('speak').textContent = '🔊 Voice on'; $('speak').classList.add('on'); $('mic').classList.add('on'); try { rec.start(); } catch {} };
+}
+
+add('j', "Hey, I'm JARVIS. Ask me anything, or say “remember that …” and I'll keep it. I'll ask before I change anything.");
+refresh(); setInterval(refresh, 15000);
+</script>
+</body>
+</html>
