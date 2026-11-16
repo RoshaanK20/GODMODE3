@@ -156,9 +156,11 @@ researchRoutes.get('/batches', async (req, res) => {
 // ── Batch: read a single file ────────────────────────────────────────
 // Path comes as wildcard: /v1/research/batch/metadata/batch_2024-01-01_0001.jsonl
 
-researchRoutes.get('/batch/*', async (req, res) => {
+researchRoutes.get('/batch/*path', async (req, res) => {
   try {
-    const filePath = req.params[0]
+    // Express 5: named wildcard params are arrays of path segments
+    const raw = (req.params as Record<string, string | string[]>).path
+    const filePath = Array.isArray(raw) ? raw.join('/') : raw
     if (!filePath || !filePath.endsWith('.jsonl')) {
       res.status(400).json({ error: 'Invalid batch path. Expected: metadata/batch_*.jsonl or dataset/batch_*.jsonl' })
       return

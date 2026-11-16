@@ -10,7 +10,8 @@
     "start": "next start",
     "lint": "next lint",
     "api": "tsx api/server.ts",
-    "api:dev": "tsx watch api/server.ts"
+    "api:dev": "tsx watch api/server.ts",
+    "jarvis:test": "tsx --test api/jarvis/jarvis.test.ts"
   },
   "dependencies": {
     "cors": "^2.8.6",

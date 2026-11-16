@@ -26,6 +26,7 @@ import { consortiumRoutes } from './routes/consortium'
 import { datasetRoutes } from './routes/dataset'
 import { metadataRoutes } from './routes/metadata'
 import { researchRoutes } from './routes/research'
+import { createJarvisRouter } from './jarvis'
 import { isPublisherEnabled, startPeriodicFlush, shutdownFlush, getPublisherStatus } from './lib/hf-publisher'
 import { TIER_CONFIGS } from './lib/tiers'
 import { ULTRAPLINIAN_MODELS } from './lib/ultraplinian'
@@ -223,6 +224,9 @@ app.use('/v1/metadata', apiKeyAuth, metadataRoutes) // individual route-level ga
 
 // Research: Pro+ for read access, Enterprise for full access
 app.use('/v1/research', apiKeyAuth, rateLimit, tierGate('research:read'), researchRoutes)
+
+// JARVIS: supervised multi-agent assistant (isolated module, see api/jarvis/)
+app.use('/v1/jarvis', apiKeyAuth, rateLimit, createJarvisRouter().router)
 
 // ── 404 ───────────────────────────────────────────────────────────────
 app.use((_req, res) => {
